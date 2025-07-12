@@ -103,11 +103,11 @@ async def generate_sse_stream(session_id: str, user_prompt: str, max_tokens: int
         if session_id not in conversation_contexts:
             conversation_contexts[session_id] = deque(maxlen=MAX_CONTEXT_LENGTH)
         
-        conversation_contexts[session_id].append(f"User: {user_prompt}")
+        conversation_contexts[session_id].append(f"<|user|>{user_prompt}<|end|>")
         
         # Build proper chat format
         context = "\n".join(list(conversation_contexts[session_id]))
-        full_prompt = f"<|system|>You are a helpful AI assistant. Give direct, concise answers.<|end|>\n{context}\nAssistant:<|start|>"
+        full_prompt = f"<|system|>You are a helpful AI assistant. Give direct concise answers.<|end|>\n<|context|>{context}<|end|>\n<|assistant|>"
         
         # Use provided max_tokens or estimate based on prompt
         if max_tokens is None:
@@ -119,7 +119,7 @@ async def generate_sse_stream(session_id: str, user_prompt: str, max_tokens: int
             temperature=0.3,
             top_p=0.95,
             repeat_penalty=1.1,
-            stop=["</s>", "User:", "Assistant:", "<|end|>", "Support:", "support:", "<system", "AI:", 'Answer:'],
+            stop=["</s>", "User:", "Assistant:", "<|end|>", "Support:", "support:", "<system", "AI:", 'Answer:', '<|end_of_instruction|>'],
             echo=False,
             stream=True
         ):

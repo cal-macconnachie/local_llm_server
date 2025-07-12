@@ -6,6 +6,7 @@ import os
 import argparse
 import torch
 import glob
+import pkg_resources
 
 # Auto-activate virtual environment if not already activated
 if not hasattr(sys, 'real_prefix') and not (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
@@ -15,6 +16,65 @@ if not hasattr(sys, 'real_prefix') and not (hasattr(sys, 'base_prefix') and sys.
         venv_python = os.path.join(venv_path, 'bin', 'python')
         if os.path.exists(venv_python):
             os.execv(venv_python, [venv_python] + sys.argv)
+    else:
+        # Create virtual environment if it doesn't exist
+        print("Virtual environment not found. Creating...")
+        try:
+            subprocess.check_call([sys.executable, '-m', 'venv', venv_path])
+            print("Virtual environment created successfully!")
+            
+            # Install requirements in the new venv before restarting
+            venv_python = os.path.join(venv_path, 'bin', 'python')
+            requirements_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
+            if os.path.exists(requirements_file):
+                print("Installing requirements in virtual environment...")
+                subprocess.check_call([
+                    venv_python, "-m", "pip", "install", "-r", requirements_file
+                ])
+                print("Requirements installed successfully!")
+            
+            # Restart script with new venv python
+            os.execv(venv_python, [venv_python] + sys.argv)
+        except subprocess.CalledProcessError:
+            print("Failed to create virtual environment or install requirements. Exiting...")
+            sys.exit(1)
+
+def check_requirements():
+    """Check if all required packages are installed"""
+    requirements_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
+    if not os.path.exists(requirements_file):
+        return True
+    
+    try:
+        with open(requirements_file, 'r') as f:
+            requirements = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        
+        for requirement in requirements:
+            try:
+                pkg_resources.require(requirement)
+            except (pkg_resources.DistributionNotFound, pkg_resources.VersionConflict):
+                return False
+        return True
+    except Exception:
+        return False
+
+def install_requirements():
+    """Install requirements from requirements.txt"""
+    requirements_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
+    if not os.path.exists(requirements_file):
+        print("No requirements.txt found, skipping installation")
+        return True
+    
+    print("Installing requirements...")
+    try:
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", "-r", requirements_file
+        ])
+        print("Requirements installed successfully!")
+        return True
+    except subprocess.CalledProcessError:
+        print("Failed to install requirements")
+        return False
 
 def get_local_ip():
     """Get the local IP address of this machine"""
@@ -88,6 +148,13 @@ def main():
     parser.add_argument("--no-choice", action="store_true", help="Auto-select first available model")
     
     args = parser.parse_args()
+    
+    # Check and install requirements if needed
+    if not check_requirements():
+        print("Some required packages are missing. Installing...")
+        if not install_requirements():
+            print("Failed to install requirements. Please install manually using: pip install -r requirements.txt")
+            return
     
     # Scan and select model
     models = scan_models()
