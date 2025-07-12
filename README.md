@@ -40,15 +40,7 @@ pip install -r requirements.txt
 
 Place GGUF model files in the `models/` directory. Default model: `phi-3-mini-4k-instruct.Q4_K_M.gguf`
 
-### 3. Start the Server
-
-```bash
-python src/server.py
-```
-
-Server runs on `http://localhost:8004`
-
-### 4. Use the Terminal Chat Client
+### 3. Use the Terminal Chat Client
 
 ```bash
 ./chat
