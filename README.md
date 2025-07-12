@@ -51,7 +51,6 @@ Server runs on `http://localhost:8004`
 ### 4. Use the Terminal Chat Client
 
 ```bash
-# From helpful-files directory
 ./chat
 ```
 

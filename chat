@@ -325,10 +325,83 @@ check_server() {
         print_color "$GREEN" "✅ Server is running at $SERVER_URL"
         return 0
     else
-        print_color "$RED" "❌ Server is not running at $SERVER_URL"
-        print_color "$CYAN" "Please start the server first with: python start_server.py"
         return 1
     fi
+}
+
+# Function to start server in background
+start_server() {
+    print_color "$YELLOW" "🚀 Starting server..."
+    
+    # Check if start_server.py exists
+    if [[ ! -f "start_server.py" ]]; then
+        print_color "$RED" "❌ start_server.py not found in current directory"
+        print_color "$CYAN" "Please run this script from the local_llm_server directory"
+        return 1
+    fi
+    
+    # Start server in a new terminal window (macOS)
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        osascript -e "
+        tell application \"Terminal\"
+            do script \"cd '$PWD' && python start_server.py --no-choice\"
+            activate
+        end tell"
+    # Linux/WSL fallback - start in background
+    else
+        nohup python start_server.py --no-choice > server.log 2>&1 &
+        SERVER_PID=$!
+        echo $SERVER_PID > .server_pid
+        print_color "$CYAN" "Server started in background (PID: $SERVER_PID)"
+        print_color "$CYAN" "Check server.log for output"
+    fi
+    
+    # Wait for server to start up
+    print_color "$CYAN" "Waiting for server to start..."
+    local attempts=0
+    local max_attempts=30
+    
+    while [[ $attempts -lt $max_attempts ]]; do
+        if check_server > /dev/null 2>&1; then
+            print_color "$GREEN" "✅ Server is now running at $SERVER_URL"
+            return 0
+        fi
+        sleep 1
+        ((attempts++))
+        printf "."
+    done
+    
+    echo
+    print_color "$RED" "❌ Server failed to start within 30 seconds"
+    return 1
+}
+
+# Function to stop server
+stop_server() {
+    print_color "$YELLOW" "🛑 Stopping server..."
+    
+    # Try to find and kill server process
+    local server_pids=$(pgrep -f "start_server.py\|uvicorn.*server:app")
+    
+    if [[ -n "$server_pids" ]]; then
+        echo "$server_pids" | while read -r pid; do
+            if kill "$pid" 2>/dev/null; then
+                print_color "$GREEN" "✅ Stopped server process (PID: $pid)"
+            fi
+        done
+    fi
+    
+    # Also check for saved PID file
+    if [[ -f ".server_pid" ]]; then
+        local saved_pid=$(cat .server_pid)
+        if kill "$saved_pid" 2>/dev/null; then
+            print_color "$GREEN" "✅ Stopped server process (PID: $saved_pid)"
+        fi
+        rm -f .server_pid
+    fi
+    
+    # Additional cleanup - kill any uvicorn processes
+    pkill -f "uvicorn.*server:app" 2>/dev/null || true
 }
 
 # Function to show help
@@ -343,8 +416,19 @@ show_help() {
     echo "Just type your message and press Enter to chat!"
 }
 
+# Cleanup function for graceful exit
+cleanup() {
+    echo
+    print_color "$BLUE" "👋 Goodbye!"
+    stop_server
+    exit 0
+}
+
 # Main chat loop
 main() {
+    # Set up signal handlers for graceful exit
+    trap cleanup SIGINT SIGTERM
+    
     # Check if required commands are available
     if ! command -v curl &> /dev/null; then
         print_color "$RED" "❌ curl is required but not installed."
@@ -357,9 +441,17 @@ main() {
         exit 1
     fi
     
-    # Check server status
+    # Check server status and start if needed
     if ! check_server; then
-        exit 1
+        print_color "$YELLOW" "❌ Server is not running at $SERVER_URL"
+        print_color "$CYAN" "Attempting to start server automatically..."
+        if ! start_server; then
+            print_color "$RED" "❌ Failed to start server automatically"
+            print_color "$CYAN" "Please start the server manually with: python start_server.py"
+            exit 1
+        fi
+    else
+        print_color "$GREEN" "✅ Server is running at $SERVER_URL"
     fi
     
     # Welcome message
@@ -397,6 +489,7 @@ main() {
                 ;;
             "/quit"|"/exit"|"/q")
                 print_color "$BLUE" "👋 Goodbye!"
+                stop_server
                 exit 0
                 ;;
             *)
