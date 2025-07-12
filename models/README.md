@@ -58,11 +58,7 @@ huggingface-cli download microsoft/Phi-3-mini-4k-instruct-gguf \
 ## Installation
 
 1. **Place model file** in this `models/` directory
-2. **Set environment variable** (optional):
-   ```bash
-   export LLM_MODEL="your-model-name.gguf"
-   ```
-3. **Restart the server** to load the new model
+2. **Restart the server** to load the new model
 
 ## Model Performance Guide
 

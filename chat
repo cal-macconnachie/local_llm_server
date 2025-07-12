@@ -1,0 +1,413 @@
+#!/bin/zsh
+
+# Local LLM Chat Client
+# Usage: ./chat.zsh
+
+# Configuration
+SERVER_URL="http://localhost:8004"
+SESSION_ID="terminal_chat_$(date +%s)"
+HISTORY_FILE="$HOME/.local_llm_chat_history"
+
+# Colors for terminal output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+GRAY='\033[0;90m'
+NC='\033[0m' # No Color
+
+# Function to print colored text
+print_color() {
+    local color=$1
+    local text=$2
+    echo -e "${color}${text}${NC}"
+}
+
+# Function to format and display AI response with markdown support
+format_ai_response() {
+    local response="$1"
+    local in_code_block=false
+    local in_thinking_block=false
+    local code_language=""
+    local temp_file=$(mktemp)
+    
+    # Decode <<NEWLINE>> back to actual newlines before processing
+    local decoded_response=$(echo "$response" | sed 's/<<NEWLINE>>/\n/g')
+    
+    # Write response to temp file and process it (preserve newlines)
+    printf "%s" "$decoded_response" > "$temp_file"
+    printf "\r"
+    printf "    "
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Check for thinking block start/end
+        if [[ "$line" == *"<|thinking|>"* ]]; then
+            # Starting thinking block
+            in_thinking_block=true
+            printf "\r"
+            print_color "$GRAY" "┌─ thinking..."
+            # Handle any content after the opening tag on the same line
+            thinking_content="${line#*<|thinking|>}"
+            if [[ -n "$thinking_content" ]]; then
+                print_color "$GRAY" "│ $thinking_content"
+            fi
+            continue
+        elif [[ "$line" == *"</|thinking|>"* ]]; then
+            # Extract content before the closing tag
+            before_close="${line%</|thinking|>*}"
+            after_close="${line#*</|thinking|>}"
+            
+            # Print content before closing tag in gray if we're in thinking mode
+            if [[ -n "$before_close" && "$in_thinking_block" == "true" ]]; then
+                print_color "$GRAY" "│ $before_close"
+            fi
+            
+            # End thinking block
+            if [[ "$in_thinking_block" == "true" ]]; then
+                print_color "$GRAY" "└─"
+                in_thinking_block=false
+            fi
+            
+            # Print content after closing tag normally
+            if [[ -n "$after_close" ]]; then
+                echo -e "$after_close"
+            fi
+            continue
+        elif [[ "$in_thinking_block" == "true" ]]; then
+            # Inside thinking block - use gray color
+            print_color "$GRAY" "│ $line"
+            continue
+        fi
+        
+        # Check for code block start/end (handle leading spaces)
+        if [[ "$line" =~ ^[[:space:]]*\`\`\`(.*)$ ]]; then
+            if [[ "$in_code_block" == "false" ]]; then
+                # Starting code block
+                in_code_block=true
+                # Extract language from the line, stripping leading spaces
+                code_language=$(echo "$line" | sed 's/^[[:space:]]*```//' | sed 's/[[:space:]]*$//')
+                if [[ -z "$code_language" ]]; then
+                    code_language="text"
+                fi
+                # clear console line to avoid printing spaces
+                printf "\r"
+                print_color "$CYAN" "┌─ Code ($code_language)"
+            else
+                # Ending code block
+                in_code_block=false
+                print_color "$CYAN" "└─"
+            fi
+        elif [[ "$in_code_block" == "true" ]]; then
+            # Inside code block - use different color and formatting
+            print_color "$GREEN" "│ $line"
+        else
+            # Regular text - handle other markdown
+            local formatted_line="$line"
+            
+            # Bold text **text** -> colored text
+            formatted_line=$(echo "$formatted_line" | sed 's/\*\*\([^*]*\)\*\*/\\033[1m\1\\033[0m/g')
+            
+            # Inline code `code` -> colored text
+            formatted_line=$(echo "$formatted_line" | sed 's/`\([^`]*\)`/\\033[0;32m\1\\033[0m/g')
+            
+            # Output without indentation for regular text
+            if [[ -n "$formatted_line" ]]; then
+                echo -e "$formatted_line"
+            else
+                echo # Empty line
+            fi
+        fi
+    done < "$temp_file"
+    
+    # Clean up temp file
+    rm -f "$temp_file"
+}
+
+# Function to show thinking animation
+show_thinking_animation() {
+    local thinking_chars="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    local pid=$1
+    local counter=0
+    
+    while kill -0 $pid 2>/dev/null; do
+        local char=${thinking_chars:$((counter % ${#thinking_chars})):1}
+        printf "    ${char} thinking..."
+        sleep 0.1
+        ((counter++))
+    done
+    printf "\r"  # Clear the thinking animation
+}
+
+# Function to send message to AI and handle streaming response
+send_message() {
+    local message="$1"
+    local json_payload=$(jq -n --arg prompt "$message" --arg session_id "$SESSION_ID" '{prompt: $prompt, session_id: $session_id}')
+    
+    print_color "$YELLOW" "🤖 AI:"
+    
+    # Use curl to stream SSE response and process events
+    local ai_response=""
+    local temp_file=$(mktemp)
+    local first_chunk_received=false
+    local terminal_width=$(tput cols)
+    local in_thinking_block=false
+    
+    # Start thinking animation in background
+    (
+        local thinking_chars="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        local counter=0
+        while [[ ! -f "${temp_file}.started" ]]; do
+            local char=${thinking_chars:$((counter % ${#thinking_chars})):1}
+            printf "\r    ${char} thinking..."
+            sleep 0.1
+            ((counter++))
+        done
+    ) &
+    local animation_pid=$!
+    
+    # Save cursor position before streaming starts
+    local cursor_save_point=""
+    
+    # Use process substitution to avoid subshell issues
+    while IFS= read -r line; do
+        # Parse SSE format
+        if [[ -n "$line" ]]; then
+            # SSE data line format: "data: {json}"
+            if [[ "$line" == data:* ]]; then
+                local json_data="${line#data: }"
+                
+                # Check if JSON is valid
+                if ! echo "$json_data" | jq . >/dev/null 2>&1; then
+                    continue  # Skip malformed JSON
+                fi
+                
+                # Extract chunk or error from JSON
+                local chunk=$(echo "$json_data" | jq -r '.chunk // empty' 2>/dev/null)
+                local error=$(echo "$json_data" | jq -r '.error // empty' 2>/dev/null)
+                
+                if [[ -n "$error" && "$error" != "empty" ]]; then
+                    print_color "$RED" "Error: $error"
+                    break
+                elif [[ "$chunk" != "empty" ]]; then
+                    # Stop thinking animation on first chunk
+                    if [[ "$first_chunk_received" == "false" ]]; then
+                        touch "${temp_file}.started"
+                        kill $animation_pid 2>/dev/null
+                        wait $animation_pid 2>/dev/null
+                        printf "\r                    \r"  # Clear any remaining thinking text
+                        # Save cursor position right before streaming starts
+                        printf "\033[s"  # Save cursor position
+                        first_chunk_received=true
+                    fi
+                    # Decode <<NEWLINE>> back to actual newlines
+                    decoded_chunk=$(echo "$chunk" | sed 's/<<NEWLINE>>/\n/g')
+                    
+                    # Check for thinking block markers in the chunk
+                    if [[ "$decoded_chunk" == *"<|thinking|>"* ]]; then
+                        in_thinking_block=true
+                        printf "\n"
+                        print_color "$GRAY" "┌─ thinking..."
+                        printf "\n"
+                        # Extract any text after the thinking marker
+                        thinking_content="${decoded_chunk#*<|thinking|>}"
+                        if [[ -n "$thinking_content" ]]; then
+                            print_color "$GRAY" "│ $thinking_content"
+                        fi
+                    elif [[ "$decoded_chunk" == *"</|thinking|>"* ]]; then
+                        # Extract any text before the end thinking marker
+                        thinking_content="${decoded_chunk%</|thinking|>*}"
+                        if [[ -n "$thinking_content" ]]; then
+                            print_color "$GRAY" "│ $thinking_content"
+                        fi
+                        print_color "$GRAY" "└─"
+                        printf "\n"
+                        in_thinking_block=false
+                        # Extract any text after the end thinking marker
+                        remaining_content="${decoded_chunk#*</|thinking|>}"
+                        if [[ -n "$remaining_content" ]]; then
+                            printf "%s" "$remaining_content"
+                        fi
+                    elif [[ "$in_thinking_block" == "true" ]]; then
+                        # Inside thinking block - print in gray
+                        print_color "$GRAY" "│ $decoded_chunk"
+                    else
+                        # Normal streaming - print as usual
+                        printf "%s" "$decoded_chunk"
+                    fi
+                    
+                    # Always accumulate for final formatting
+                    printf "%s" "$chunk" >> "$temp_file"
+                fi
+            # SSE event line format: "event: done"
+            elif [[ "$line" == event:* ]]; then
+                local event_type="${line#event: }"
+                if [[ "$event_type" == "done" || "$event_type" == "error" ]]; then
+                    break
+                fi
+            fi
+        fi
+    done < <(curl -s --no-buffer -X POST "$SERVER_URL/generate/" \
+        -H "Content-Type: application/json" \
+        -H "Accept: text/event-stream" \
+        -d "$json_payload")
+    
+    # Clean up animation process if still running
+    kill $animation_pid 2>/dev/null
+    wait $animation_pid 2>/dev/null
+    
+    # Read accumulated response for history and format it
+    if [[ -f "$temp_file" ]]; then
+        ai_response=$(cat "$temp_file")
+        
+        # Replace streamed content with formatted version
+        if [[ -n "$ai_response" ]]; then
+            # Small delay to ensure all streaming is complete
+            sleep 0.1
+            
+            # Restore cursor to saved position and clear from there
+            if [[ "$first_chunk_received" == "true" ]]; then
+                printf "\033[u"  # Restore cursor position
+                printf "\033[0J"  # Clear from cursor to end of screen
+            fi
+            
+            # Print the formatted version (trim leading/trailing whitespace)
+            format_ai_response "$(echo "$ai_response" | sed 's/^[[:space:]]*//')"
+        fi
+        
+        rm "$temp_file"
+        
+        # Clean up animation marker file
+        rm -f "${temp_file}.started"
+        
+        # Save to history
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] User: $message" >> "$HISTORY_FILE"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] AI: $ai_response" >> "$HISTORY_FILE"
+        echo "" >> "$HISTORY_FILE"
+    fi
+    
+}
+
+# Function to show chat history
+show_history() {
+    if [[ -f "$HISTORY_FILE" ]]; then
+        print_color "$CYAN" "📚 Chat History:"
+        echo
+        cat "$HISTORY_FILE" | tail -50 | while IFS= read -r line; do
+            if [[ "$line" =~ ^\[.*\]\ User: ]]; then
+                local user_msg=$(echo "$line" | sed 's/^\[.*\] User: //')
+                print_color "$GREEN" "👤 You: $user_msg"
+            elif [[ "$line" =~ ^\[.*\]\ AI: ]]; then
+                local ai_msg=$(echo "$line" | sed 's/^\[.*\] AI: //')
+                print_color "$YELLOW" "🤖 AI:"
+                format_ai_response "$ai_msg"
+            elif [[ -n "$line" ]]; then
+                echo "$line"
+            fi
+        done
+    else
+        print_color "$CYAN" "No chat history found."
+    fi
+}
+
+# Function to clear chat history
+clear_history() {
+    if [[ -f "$HISTORY_FILE" ]]; then
+        rm "$HISTORY_FILE"
+        print_color "$GREEN" "✅ Chat history cleared."
+    else
+        print_color "$CYAN" "No history to clear."
+    fi
+}
+
+# Function to check server status
+check_server() {
+    if curl -s --connect-timeout 5 "$SERVER_URL/docs" > /dev/null; then
+        print_color "$GREEN" "✅ Server is running at $SERVER_URL"
+        return 0
+    else
+        print_color "$RED" "❌ Server is not running at $SERVER_URL"
+        print_color "$CYAN" "Please start the server first with: python start_server.py"
+        return 1
+    fi
+}
+
+# Function to show help
+show_help() {
+    print_color "$CYAN" "Local LLM Chat Commands:"
+    echo "  /help     - Show this help message"
+    echo "  /history  - Show recent chat history"
+    echo "  /clear    - Clear chat history"
+    echo "  /quit     - Exit the chat"
+    echo "  /exit     - Exit the chat"
+    echo
+    echo "Just type your message and press Enter to chat!"
+}
+
+# Main chat loop
+main() {
+    # Check if required commands are available
+    if ! command -v curl &> /dev/null; then
+        print_color "$RED" "❌ curl is required but not installed."
+        exit 1
+    fi
+    
+    if ! command -v jq &> /dev/null; then
+        print_color "$RED" "❌ jq is required but not installed."
+        print_color "$CYAN" "Install with: brew install jq"
+        exit 1
+    fi
+    
+    # Check server status
+    if ! check_server; then
+        exit 1
+    fi
+    
+    # Welcome message
+    clear
+    print_color "$BLUE" "🚀 Local LLM Chat"
+    print_color "$BLUE" "=================="
+    echo
+    print_color "$CYAN" "Connected to: $SERVER_URL"
+    print_color "$CYAN" "Session ID: $SESSION_ID"
+    echo
+    show_help
+    echo
+    
+    # Main chat loop
+    while true; do
+        print_color "$GREEN" "👤 You:"
+        echo -n "    "
+        read -r user_input
+        
+        # Handle empty input
+        if [[ -z "$user_input" ]]; then
+            continue
+        fi
+        
+        # Handle commands
+        case "$user_input" in
+            "/help")
+                show_help
+                ;;
+            "/history")
+                show_history
+                ;;
+            "/clear")
+                clear_history
+                ;;
+            "/quit"|"/exit"|"/q")
+                print_color "$BLUE" "👋 Goodbye!"
+                exit 0
+                ;;
+            *)
+                # Send message to AI
+                send_message "$user_input"
+                ;;
+        esac
+        
+        echo # Extra spacing between exchanges
+    done
+}
+
+# Run main function
+main "$@"

@@ -133,4 +133,4 @@ Use smaller quantized models (Q4_K_M) or reduce context window.
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License
