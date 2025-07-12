@@ -1,0 +1,8 @@
+transformers
+torch
+flask
+flask-cors
+fastapi
+uvicorn
+accelerate
+llama-cpp-python

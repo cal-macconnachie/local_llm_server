@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source:*)",
+      "Bash(pip install:*)",
+      "Bash(pkill:*)",
+      "Bash(chmod:*)",
+      "Bash(python:*)",
+      "Bash(mkdir:*)"
+    ],
+    "deny": []
+  }
+}
