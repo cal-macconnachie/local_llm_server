@@ -2,3 +2,4 @@ venv/
 models/*
 !models/*.md
 .DS_Store
+.claude
