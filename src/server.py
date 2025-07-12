@@ -54,38 +54,65 @@ class InputText(BaseModel):
     max_tokens: int = None
 
 def estimate_response_tokens(prompt: str) -> int:
-    """Estimate required tokens based on prompt characteristics"""
-    # Base token count
-    base_tokens = 150
+    """Estimate required tokens based on prompt characteristics and length"""
+    # More generous base token count
+    base_tokens = 512
     
-    # Adjust based on prompt length (longer prompts often need longer responses)
+    # More sophisticated prompt length analysis
     prompt_length = len(prompt.split())
-    if prompt_length > 50:
-        base_tokens += 100
-    elif prompt_length > 100:
-        base_tokens += 200
+    char_length = len(prompt)
     
-    # Adjust based on prompt type
+    # Scale with prompt length (longer prompts usually need longer responses)
+    if prompt_length > 200:
+        base_tokens += 1024
+    elif prompt_length > 100:
+        base_tokens += 768
+    elif prompt_length > 50:
+        base_tokens += 512
+    elif prompt_length > 20:
+        base_tokens += 256
+    
+    # Character-based scaling for very long prompts
+    if char_length > 2000:
+        base_tokens += 1024
+    elif char_length > 1000:
+        base_tokens += 512
+    
+    # Adjust based on prompt type with more generous allocations
     prompt_lower = prompt.lower()
     
-    # Code-related prompts need more tokens
-    if any(keyword in prompt_lower for keyword in ['code', 'function', 'script', 'program', 'implement']):
-        base_tokens += 500
+    # Code-related prompts need significantly more tokens
+    code_keywords = ['code', 'function', 'script', 'program', 'implement', 'debug', 'refactor', 'class', 'method']
+    if any(keyword in prompt_lower for keyword in code_keywords):
+        base_tokens += 1536
     
-    # Explanation/tutorial prompts need more tokens
-    if any(keyword in prompt_lower for keyword in ['explain', 'how to', 'tutorial', 'guide', 'steps']):
-        base_tokens += 200
+    # Explanation/tutorial prompts need substantial tokens
+    explain_keywords = ['explain', 'how to', 'tutorial', 'guide', 'steps', 'walkthrough', 'detail']
+    if any(keyword in prompt_lower for keyword in explain_keywords):
+        base_tokens += 1024
     
-    # List/enumeration prompts need more tokens
-    if any(keyword in prompt_lower for keyword in ['list', 'examples', 'ways', 'methods', 'types', 'table']):
-        base_tokens += 350
+    # List/enumeration prompts need good token allocation
+    list_keywords = ['list', 'examples', 'ways', 'methods', 'types', 'table', 'compare', 'options']
+    if any(keyword in prompt_lower for keyword in list_keywords):
+        base_tokens += 768
     
-    # Creative writing needs more tokens
-    if any(keyword in prompt_lower for keyword in ['story', 'write', 'creative', 'poem', 'essay']):
-        base_tokens += 250
+    # Creative writing needs generous allocation
+    creative_keywords = ['story', 'write', 'creative', 'poem', 'essay', 'narrative', 'fiction']
+    if any(keyword in prompt_lower for keyword in creative_keywords):
+        base_tokens += 1024
     
-    # Cap at reasonable limits
-    final_tokens = min(max(base_tokens, 50), 1200)
+    # Technical analysis needs more tokens
+    analysis_keywords = ['analyze', 'review', 'assessment', 'evaluation', 'research', 'study']
+    if any(keyword in prompt_lower for keyword in analysis_keywords):
+        base_tokens += 1024
+    
+    # Question answering with context
+    qa_keywords = ['what', 'why', 'how', 'when', 'where', 'which', 'who']
+    if any(prompt_lower.startswith(keyword) for keyword in qa_keywords):
+        base_tokens += 512
+    
+    # Set reasonable limits with much higher caps
+    final_tokens = min(max(base_tokens, 256), 4096)
     return final_tokens
 
 async def generate_sse_stream(session_id: str, user_prompt: str, max_tokens: int = None) -> AsyncGenerator[str, None]:
@@ -103,11 +130,11 @@ async def generate_sse_stream(session_id: str, user_prompt: str, max_tokens: int
         if session_id not in conversation_contexts:
             conversation_contexts[session_id] = deque(maxlen=MAX_CONTEXT_LENGTH)
         
-        conversation_contexts[session_id].append(f"<|user|>{user_prompt}<|end|>")
+        conversation_contexts[session_id].append(f"User: {user_prompt}")
         
         # Build proper chat format
         context = "\n".join(list(conversation_contexts[session_id]))
-        full_prompt = f"<|system|>You are a helpful AI assistant. Give direct concise answers.<|end|>\n<|context|>{context}<|end|>\n<|assistant|>"
+        full_prompt = f"<|system|>You are a helpful AI assistant. Give direct, concise answers. Please ensure your responses are well formatted using markdown and newlines. IMPORTANT: You must wrap ONLY your reasoning and planning in <|thinking|> tags, then provide your final answer OUTSIDE the thinking tags. Example format:\n\n<|thinking|>\nLet me think about this step by step...\n</|thinking|>\n\nHere is my final answer without thinking tags.<|end|>\n{context}\nAssistant:"
         
         # Use provided max_tokens or estimate based on prompt
         if max_tokens is None:
@@ -176,7 +203,7 @@ async def generate_response_sync(input_text: InputText):
         
         # Build proper chat format  
         context = "\n".join(list(conversation_contexts[session_id]))
-        full_prompt = f"<|system|>You are a helpful AI assistant. Give direct, concise answers. Please ensure you're responses are well formatted using markdown and newlines.<|end|>\n{context}\nAssistant:"
+        full_prompt = f"<|system|>You are a helpful AI assistant. Give direct, concise answers. Please ensure your responses are well formatted using markdown and newlines. IMPORTANT: You must wrap ONLY your reasoning and planning in <|thinking|> tags, then provide your final answer OUTSIDE the thinking tags. Example format:\n\n<|thinking|>\nLet me think about this step by step...\n</|thinking|>\n\nHere is my final answer without thinking tags.<|end|>\n{context}\nAssistant:"
         max_tokens = input_text.max_tokens or estimate_response_tokens(user_prompt)
         result = generator(
             full_prompt,
