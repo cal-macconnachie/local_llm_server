@@ -3,7 +3,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import os
 import json
-from typing import Dict, AsyncGenerator
+import re
+from typing import Dict, AsyncGenerator, Optional
 from collections import deque
 
 app = FastAPI()
@@ -146,7 +147,7 @@ async def generate_sse_stream(session_id: str, user_prompt: str, max_tokens: int
             temperature=0.3,
             top_p=0.95,
             repeat_penalty=1.1,
-            stop=["</s>", "User:", "Assistant:", "<|end|>", "Support:", "support:", "<system", "AI:", 'Answer:', '<|end_of_instruction|>'],
+            stop=["</s>", "User:", "Assistant:", "<|end|>", "Support:", "support:", "<system", "AI:", 'Answer:', '<|end_of_instruction|>', '</|end|>'],
             echo=False,
             stream=True
         ):
@@ -203,7 +204,7 @@ async def generate_response_sync(input_text: InputText):
         
         # Build proper chat format  
         context = "\n".join(list(conversation_contexts[session_id]))
-        full_prompt = f"<|system|>You are a helpful AI assistant. Give direct, concise answers. Please ensure your responses are well formatted using markdown and newlines. IMPORTANT: You must wrap ONLY your reasoning and planning in <|thinking|> tags, then provide your final answer OUTSIDE the thinking tags. Example format:\n\n<|thinking|>\nLet me think about this step by step...\n</|thinking|>\n\nHere is my final answer without thinking tags.<|end|>\n{context}\nAssistant:"
+        full_prompt = f"<|system|>You are a helpful AI assistant. Give direct, concise answers. Please ensure your responses are well formatted using markdown and newlines. IMPORTANT: You must wrap ONLY your reasoning and planning in <|thinking|> tags, then provide your final answer OUTSIDE the thinking tags, there MUST ALWAYS be an answer outside the thinking tags. Example format:\n\n<|thinking|>\nLet me think about this step by step...\n</|thinking|>\n\nHere is my final answer without thinking tags.<|end|>\n{context}\nAssistant:"
         max_tokens = input_text.max_tokens or estimate_response_tokens(user_prompt)
         result = generator(
             full_prompt,

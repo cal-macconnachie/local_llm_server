@@ -3,3 +3,4 @@ models/*
 !models/*.md
 .DS_Store
 .claude
+src/__pycache__

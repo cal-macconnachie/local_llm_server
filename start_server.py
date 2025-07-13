@@ -4,9 +4,21 @@ import socket
 import sys
 import os
 import argparse
-import torch
 import glob
-import pkg_resources
+
+def check_system_requirements():
+    """Check if system-level requirements are available"""
+    try:
+        import setuptools
+        return True
+    except ImportError:
+        print("setuptools not available. Please install it with: pip install --user setuptools")
+        return False
+
+# Check system requirements first
+if not check_system_requirements():
+    print("Failed to install system requirements. Exiting...")
+    sys.exit(1)
 
 # Auto-activate virtual environment if not already activated
 if not hasattr(sys, 'real_prefix') and not (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
@@ -46,6 +58,7 @@ def check_requirements():
         return True
     
     try:
+        import pkg_resources
         with open(requirements_file, 'r') as f:
             requirements = [line.strip() for line in f if line.strip() and not line.startswith('#')]
         
@@ -91,6 +104,7 @@ def get_local_ip():
 def detect_gpu():
     """Detect if GPU is available"""
     try:
+        import torch
         return torch.cuda.is_available() and torch.cuda.device_count() > 0
     except:
         return False
